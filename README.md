@@ -112,11 +112,12 @@ PUT /approve-leave
 ## 📌 **Project Structure**
 ```
 📂 leave-management-system
- ├── 📂 src
- │   ├── 📄 handler.ts       # Lambda functions
- │   ├── 📄 dynamoService.ts # DynamoDB interactions
- │   ├── 📄 emailService.ts  # AWS SES Email handling
- ├── 📄 serverless.yml       # Deployment Configuration
+ ├── 📂 hello-world
+ │   ├── 📄 app.ts       # Lambda functions
+ │  
+ │   
+ ├── 📄 template.yml             # Deployment Configuration
+ ├── 📄 step-function.asl.json   
  ├── 📄 package.json         # Dependencies
  ├── 📄 README.md            # Project Documentation
 ```
