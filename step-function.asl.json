@@ -1,0 +1,47 @@
+{
+    "Comment": "Leave Management Workflow",
+    "StartAt": "SendApprovalEmail",
+    "States": {
+        "SendApprovalEmail": {
+            "Type": "Task",
+            "Resource": "arn:aws:lambda:REGION:ACCOUNT_ID:function:SendApprovalEmail",
+            "Parameters": {
+                "requestId.$": "$.requestId",
+                "email.$": "$.email",
+                "taskToken.$": "$$.Task.Token"
+            },
+            "TimeoutSeconds": 60,
+            "HeartbeatSeconds": 10,
+            "Next": "WaitForApproval"
+        },
+        "WaitForApproval": {
+            "Type": "Wait",
+            "Seconds": 60,
+            "Next": "CheckApprovalStatus"
+        },
+        "CheckApprovalStatus": {
+            "Type": "Choice",
+            "Choices": [
+                {
+                    "Variable": "$.approved",
+                    "BooleanEquals": true,
+                    "Next": "NotifyUser"
+                }
+            ],
+            "Default": "EndState"
+        },
+        "NotifyUser": {
+            "Type": "Task",
+            "Resource": "arn:aws:lambda:REGION:ACCOUNT_ID:function:NotifyUser",
+            "Parameters": {
+                "requestId.$": "$.requestId",
+                "email.$": "$.email"
+            },
+            "End": true
+        },
+        "EndState": {
+            "Type": "Fail",
+            "Cause": "Leave request not approved"
+        }
+    }
+}

@@ -1,0 +1,112 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Leave Management System
+
+  This SAM template provisions Lambda functions, API Gateway, DynamoDB, Step Functions, and SES for a leave management system.
+
+Globals:
+  Function:
+    Timeout: 15
+    LoggingConfig:
+      LogFormat: JSON
+
+Resources:
+  LeaveTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: LeaveRequestsAbhi
+      AttributeDefinitions:
+        - AttributeName: requestId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: requestId
+          KeyType: HASH
+      BillingMode: PAY_PER_REQUEST
+
+  LeaveAPI:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: LeaveManagementAPI
+      StageName: Prod
+      Cors: "'*'"
+
+  ApplyLeaveFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - app.ts
+    Properties:
+      CodeUri: hello-world/
+      Handler: app.applyLeave
+      Runtime: nodejs18.x
+      Architectures:
+        - x86_64
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LeaveTable
+        
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref LeaveTable
+          SES_EMAIL: "abhijeet.aayush@antstack.io"
+          
+      Events:
+        ApplyLeave:
+          Type: Api
+          Properties:
+            Path: /apply-leave
+            Method: POST
+            RestApiId: !Ref LeaveAPI
+
+  ApproveLeaveFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - app.ts
+    Properties:
+      CodeUri: hello-world/
+      Handler: app.approveLeave
+      Runtime: nodejs18.x
+      Architectures:
+        - x86_64
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LeaveTable
+        - AmazonSESFullAccess
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref LeaveTable
+          SES_EMAIL: "abhijeet.aayush@antstack.io"
+      Events:
+        ApproveLeave:
+          Type: Api
+          Properties:
+            Path: /approve-leave
+            Method: POST
+            RestApiId: !Ref LeaveAPI
+
+  LeaveStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Metadata:
+      Description: Step Function for leave approval process
+    Properties:
+      DefinitionUri: step-function.asl.json
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref ApplyLeaveFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref ApproveLeaveFunction
+        
+
+  
