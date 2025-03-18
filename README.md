@@ -19,8 +19,8 @@ A serverless **Leave Management System** built using AWS Lambda, DynamoDB, and S
 
 ## 🛠 **Installation & Setup**
 ### **1️⃣ Clone the Repository**
-```sh
-git clone https://github.com/yourusername/leave-management-system.git
+```sh[
+git clone https://github.com/AbhijeetAayush/AWS-Leave_Management.git
 cd leave-management-system
 ```
 
