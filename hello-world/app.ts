@@ -174,7 +174,39 @@ export const processApproval = async (event: APIGatewayProxyEvent): Promise<APIG
 
     return {
       statusCode: 200,
-      body: JSON.stringify({ message: `Leave request ${requestId} ${approvalStatus.toLowerCase()}` })
+      headers: { "Content-Type": "text/html" },
+      body: /*JSON.stringify({ message: `Leave request ${requestId} ${approvalStatus.toLowerCase()}` })*/
+      `
+        <html>
+          <head>
+            <title>Leave Request ${approvalStatus}</title>
+          </head>
+          <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px; background-color: #f5f5f5;">
+            <div style="max-width: 600px; margin: 0 auto; padding: 20px; background-color: white; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
+              <h1 style="color: ${approvalStatus === 'APPROVED' ? '#4CAF50' : '#f44336'};">
+                Leave Request ${approvalStatus === 'APPROVED' ? 'Approved' : 'Rejected'}
+              </h1>
+              <p style="font-size: 18px; margin: 20px 0;">
+                The leave request <strong>${requestId}</strong> has been successfully ${approvalStatus.toLowerCase()}.
+              </p>
+              <p style="color: #777;">
+                ${
+                  approvalStatus === 'APPROVED'
+                    ? 'The employee has been notified of the approval.'
+                    : 'The employee has been informed of the rejection.'
+                }
+              </p>
+              <a href="https://your-dashboard.com" 
+                 style="display: inline-block; padding: 12px 24px; background-color: #007BFF; color: white; text-decoration: none; border-radius: 5px; font-weight: bold; margin-top: 20px;">
+                Back to Dashboard
+              </a>
+              <p style="font-size: 14px; color: #999; margin-top: 30px;">
+                If you have any questions, please contact HR support.
+              </p>
+            </div>
+          </body>
+        </html>
+      `
     };
   } catch (error) {
     console.error("Error in processApproval:", error);
@@ -238,7 +270,7 @@ export const notifyUser = async (event: any): Promise<void> => {
                     <!-- Optional Interactive Button -->
                     <a href="https://your-dashboard.com/leave/${requestId}" 
                        style="background-color: #007BFF; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block;">
-                      View Details
+                      View Detail
                     </a>
           
                     <p style="margin-top: 20px; font-size: 12px; color: #777;">
