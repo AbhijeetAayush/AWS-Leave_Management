@@ -1,0 +1,22 @@
+openapi: 3.0.0
+info:
+  title: Leave Management API
+  version: 1.0.0
+paths:
+  /apply-leave:
+    post:
+      x-amazon-apigateway-integration:
+        uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ApplyLeaveFunction.Arn}/invocations"
+        httpMethod: POST
+        type: aws_proxy
+  /approve-leave:
+    get:
+      x-amazon-apigateway-integration:
+        uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ApproveLeaveFunction.Arn}/invocations"
+        httpMethod: POST
+        type: aws_proxy
+    post:
+      x-amazon-apigateway-integration:
+        uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ApproveLeaveFunction.Arn}/invocations"
+        httpMethod: POST
+        type: aws_proxy

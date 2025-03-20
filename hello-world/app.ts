@@ -1,135 +1,264 @@
-import { DynamoDBClient, UpdateItemCommand, PutItemCommand, GetItemCommand } from "@aws-sdk/client-dynamodb";
+import { DynamoDBClient, PutItemCommand, GetItemCommand } from "@aws-sdk/client-dynamodb";
 import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
+import { SFNClient, StartExecutionCommand, SendTaskSuccessCommand } from "@aws-sdk/client-sfn"; // 
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from "aws-lambda";
 
 const dynamo = new DynamoDBClient({});
 const ses = new SESClient({});
+const sfn = new SFNClient({}); 
 const TABLE_NAME = process.env.TABLE_NAME!;
 const SES_EMAIL = process.env.SES_EMAIL!;
+const STATE_MACHINE_ARN = process.env.STATE_MACHINE_ARN!; 
+const APPROVER_EMAIL = process.env.APPROVER_EMAIL!;
 
-// Apply for Leave
+
 export const applyLeave = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
-  try {
-    console.log("TABLE_NAME:", TABLE_NAME, "SES_EMAIL:", SES_EMAIL);
-    if (!TABLE_NAME || !SES_EMAIL) {
-      throw new Error("Missing TABLE_NAME or SES_EMAIL in environment variables");
-    }
-
-    const body = JSON.parse(event.body || "{}");
-    if (!body.userEmail || !body.leaveType || !body.startDate || !body.endDate) {
-      return { statusCode: 400, body: JSON.stringify({ message: "Missing required fields" }) };
-    }
-
-    const requestId = `LEAVE-${Date.now()}`;
-    console.log("Applying leave for:", body.userEmail, "Request ID:", requestId);
-
-    await dynamo.send(new PutItemCommand({
-      TableName: TABLE_NAME,
-      Item: {
-        requestId: { S: requestId },
-        userEmail: { S: body.userEmail },
-        leaveType: { S: body.leaveType },
-        startDate: { S: body.startDate },
-        endDate: { S: body.endDate },
-        reason: { S: body.reason || "Not provided" },
-        status: { S: "PENDING" }
+    try {
+      if (!TABLE_NAME || !SES_EMAIL || !STATE_MACHINE_ARN) {
+        throw new Error("Missing required environment variables");
       }
-    }));
-
-    await sendApprovalEmail(requestId, body.userEmail);
-
-    return {
-      statusCode: 200,
-      body: JSON.stringify({ message: "Leave applied", requestId })
-    };
-  } catch (error) {
-    console.error("Error in applyLeave:", error);
-    return { statusCode: 500, body: JSON.stringify({ message: "Internal server error" }) };
-  }
-};
-
-// Send Approval Email
-export const sendApprovalEmail = async (requestId: string, userEmail: string) => {
-  try {
-    const emailParams = {
-      Destination: { ToAddresses: [SES_EMAIL] },
-      Message: {
-        Body: { Text: { Data: `A leave request ${requestId} from ${userEmail} needs approval.` } },
-        Subject: { Data: "Leave Approval Request" }
-      },
-      Source: SES_EMAIL
-    };
-
-    console.log("Sending approval email for request:", requestId);
-    await ses.send(new SendEmailCommand(emailParams));
-  } catch (error) {
-    console.error("Error in sendApprovalEmail:", error);
-  }
-};
-
-// Approve Leave
-export const approveLeave = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
-  try {
-    const body = JSON.parse(event.body || "{}");
-    const { requestId, approved } = body;
-
-    if (!requestId || approved === undefined) {
-      return { statusCode: 400, body: JSON.stringify({ message: "requestId and approved status are required" }) };
+      //const APPROVER_EMAIL = process.env.APPROVER_EMAIL!;
+  
+      const body = JSON.parse(event.body || "{}");
+      if (!body.userEmail || !body.leaveType || !body.startDate || !body.endDate ) {
+        return { statusCode: 400, body: JSON.stringify({ message: "Missing required fields" }) };
+      }
+  
+      const requestId = `LEAVE-${Date.now()}`;
+      console.log("Applying leave for:", body.userEmail, "Request ID:", requestId);
+  
+      
+      await dynamo.send(new PutItemCommand({
+        TableName: TABLE_NAME,
+        Item: {
+          requestId: { S: requestId },
+          userEmail: { S: body.userEmail },
+          approverEmail: { S: APPROVER_EMAIL  },
+          leaveType: { S: body.leaveType },
+          startDate: { S: body.startDate },
+          endDate: { S: body.endDate },
+          reason: { S: body.reason || "Not provided" },
+          status: { S: "PENDING" }
+        }
+      }));
+  
+      
+      const apiBaseUrl = `https://${event.requestContext.domainName}/${event.requestContext.stage}`;
+  
+      
+      const input = {
+        requestId,
+        userEmail: body.userEmail,
+        approverEmail: APPROVER_EMAIL,
+        leaveDetails: {
+          leaveType: body.leaveType,
+          startDate: body.startDate,
+          endDate: body.endDate,
+          reason: body.reason || "Not provided"
+        },
+        apiBaseUrl
+      };
+  
+      await sfn.send(new StartExecutionCommand({
+        stateMachineArn: STATE_MACHINE_ARN,
+        input: JSON.stringify(input)
+      }));
+  
+      return {
+        statusCode: 200,
+        body: JSON.stringify({ message: "Leave applied", requestId })
+      };
+    } catch (error) {
+      console.error("Error in applyLeave:", error);
+      return { statusCode: 500, body: JSON.stringify({ message: "Internal server error" }) };
     }
+  };
 
-    console.log(`Updating leave request ${requestId} to ${approved ? "APPROVED" : "REJECTED"}`);
-
-    await dynamo.send(new UpdateItemCommand({
-      TableName: TABLE_NAME,
-      Key: { requestId: { S: requestId } },
-      UpdateExpression: "SET #status = :s",
-      ExpressionAttributeNames: { "#status": "status" },
-      ExpressionAttributeValues: { ":s": { S: approved ? "APPROVED" : "REJECTED" } }
-    }));
-
-    await notifyUser(requestId, approved);
-
-    return {
-      statusCode: 200,
-      body: JSON.stringify({ message: "Leave status updated" })
-    };
-  } catch (error) {
-    console.error("Error in approveLeave:", error);
-    return { statusCode: 500, body: JSON.stringify({ message: "Internal server error" }) };
-  }
-};
-
-// Notify User
-export const notifyUser = async (requestId: string, approved: boolean) => {
-  try {
-    // Fetch the user's email from DynamoDB
-    const { Item } = await dynamo.send(new GetItemCommand({
-      TableName: TABLE_NAME,
-      Key: { requestId: { S: requestId } }
-    }));
-
-    if (!Item || !Item.userEmail) {
-      console.error(`No user email found for requestId: ${requestId}`);
-      return;
-    }
-
-    const userEmail = Item.userEmail.S;
-    const statusText = approved ? "APPROVED" : "REJECTED";
-
-    const emailParams = {
-        Destination: { ToAddresses: [userEmail].filter((email): email is string => Boolean(email)) },
+export const sendApprovalEmail = async (event: any): Promise<void> => {
+    try {
+      const { requestId, userEmail, approverEmail, leaveDetails, taskToken, apiBaseUrl } = event;
+  
+     
+      const approveUrl = `${apiBaseUrl}/process-approval?requestId=${requestId}&action=approve&taskToken=${encodeURIComponent(taskToken)}`;
+      const rejectUrl = `${apiBaseUrl}/process-approval?requestId=${requestId}&action=reject&taskToken=${encodeURIComponent(taskToken)}`;
+  
+      const emailParams = {
+        Destination: { ToAddresses: [approverEmail] },
         Message: {
-            Body: { Text: { Data: `Your leave request ${requestId} has been ${statusText}.` } },
+          Body: {
+            Html: {
+              Data: `
+                <html>
+                  <body style="font-family: Arial, sans-serif; color: #333;">
+                    <div style="max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 5px;">
+                      <h2 style="color: #007BFF;">Leave Approval Request</h2>
+                      <p>Dear Approver,</p>
+                      <p>A leave request (<strong>${requestId}</strong>) from <strong>${userEmail}</strong> requires your approval:</p>
+                      
+                      <h3 style="margin-top: 20px;">Leave Details</h3>
+                      <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+                        <tr style="background-color: #f5f5f5;">
+                          <th style="padding: 10px; text-align: left; border-bottom: 1px solid #ddd;">Field</th>
+                          <th style="padding: 10px; text-align: left; border-bottom: 1px solid #ddd;">Details</th>
+                        </tr>
+                        <tr>
+                          <td style="padding: 10px; border-bottom: 1px solid #ddd;">Leave Type</td>
+                          <td style="padding: 10px; border-bottom: 1px solid #ddd;">${leaveDetails.leaveType}</td>
+                        </tr>
+                        <tr>
+                          <td style="padding: 10px; border-bottom: 1px solid #ddd;">Start Date</td>
+                          <td style="padding: 10px; border-bottom: 1px solid #ddd;">${leaveDetails.startDate}</td>
+                        </tr>
+                        <tr>
+                          <td style="padding: 10px; border-bottom: 1px solid #ddd;">End Date</td>
+                          <td style="padding: 10px; border-bottom: 1px solid #ddd;">${leaveDetails.endDate}</td>
+                        </tr>
+                        <tr>
+                          <td style="padding: 10px; border-bottom: 1px solid #ddd;">Reason</td>
+                          <td style="padding: 10px; border-bottom: 1px solid #ddd;">${leaveDetails.reason}</td>
+                        </tr>
+                      </table>
             
+                      <p style="margin-bottom: 20px;">Please review the request and take action below:</p>
+                      
+                      <div style="text-align: center;">
+                        <a href="${approveUrl}" 
+                           style="background-color: #4CAF50; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block; margin: 0 10px; font-weight: bold;">
+                          Approve
+                        </a>
+                        <a href="${rejectUrl}" 
+                           style="background-color: #f44336; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block; margin: 0 10px; font-weight: bold;">
+                          Reject
+                        </a>
+                      </div>
+            
+                      <p style="margin-top: 20px; font-size: 12px; color: #777;">
+                        This is an automated message. Please do not reply directly to this email.
+                      </p>
+                    </div>
+                  </body>
+                </html>
+              `
+            }
+          },
           Subject: { Data: "Leave Approval Request" }
         },
         Source: SES_EMAIL
       };
-      
+  
+      console.log("Sending approval email for request:", requestId);
+      await ses.send(new SendEmailCommand(emailParams));
+    } catch (error) {
+      console.error("Error in sendApprovalEmail:", error);
+      throw error; 
+    }
+  };
+
+export const processApproval = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
+  try {
+    const queryParams = event.queryStringParameters || {};
+    const { requestId, action, taskToken } = queryParams;
+
+    if (!requestId || !action || !taskToken) {
+      return { statusCode: 400, body: JSON.stringify({ message: "Missing required query parameters" }) };
+    }
+
+    const approvalStatus = action === "approve" ? "APPROVED" : "REJECTED";
+    console.log(`Processing ${approvalStatus} for request: ${requestId}`);
+
+   
+    await sfn.send(new SendTaskSuccessCommand({
+      taskToken,
+      output: JSON.stringify({ approvalStatus })
+    }));
+
+    return {
+      statusCode: 200,
+      body: JSON.stringify({ message: `Leave request ${requestId} ${approvalStatus.toLowerCase()}` })
+    };
+  } catch (error) {
+    console.error("Error in processApproval:", error);
+    return { statusCode: 500, body: JSON.stringify({ message: "Internal server error" }) };
+  }
+};
+
+
+export const notifyUser = async (event: any): Promise<void> => {
+  try {
+    const { requestId, userEmail, approvalStatus, leaveDetails } = event;
+
+    const statusText = approvalStatus === "APPROVED" ? "APPROVED" : "REJECTED";
+    const emailParams = {
+      Destination: { ToAddresses: [userEmail] },
+      Message: {
+        Body: {
+          Html: {
+            Data: `
+              <html>
+                <body style="font-family: Arial, sans-serif; color: #333;">
+                  <div style="max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 5px;">
+                    <h2 style="color: ${statusText === 'APPROVED' ? '#4CAF50' : '#f44336'};">
+                      Leave Request Update
+                    </h2>
+                    <p>Dear ${userEmail.split('@')[0]},</p>
+                    <p>Your leave request (<strong>${requestId}</strong>) has been <strong>${statusText}</strong>.</p>
+                    
+                    <h3 style="margin-top: 20px;">Leave Details</h3>
+                    <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+                      <tr style="background-color: #f5f5f5;">
+                        <th style="padding: 10px; text-align: left; border-bottom: 1px solid #ddd;">Field</th>
+                        <th style="padding: 10px; text-align: left; border-bottom: 1px solid #ddd;">Details</th>
+                      </tr>
+                      <tr>
+                        <td style="padding: 10px; border-bottom: 1px solid #ddd;">Leave Type</td>
+                        <td style="padding: 10px; border-bottom: 1px solid #ddd;">${leaveDetails.leaveType}</td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 10px; border-bottom: 1px solid #ddd;">Start Date</td>
+                        <td style="padding: 10px; border-bottom: 1px solid #ddd;">${leaveDetails.startDate}</td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 10px; border-bottom: 1px solid #ddd;">End Date</td>
+                        <td style="padding: 10px; border-bottom: 1px solid #ddd;">${leaveDetails.endDate}</td>
+                      </tr>
+                      <tr>
+                        <td style="padding: 10px; border-bottom: 1px solid #ddd;">Reason</td>
+                        <td style="padding: 10px; border-bottom: 1px solid #ddd;">${leaveDetails.reason}</td>
+                      </tr>
+                    </table>
+          
+                    <p style="margin-bottom: 20px;">
+                      ${
+                        statusText === 'APPROVED'
+                          ? 'Enjoy your time off! If you need to make changes, please contact your approver.'
+                          : 'If you have questions, please reach out to your approver.'
+                      }
+                    </p>
+          
+                    <!-- Optional Interactive Button -->
+                    <a href="https://your-dashboard.com/leave/${requestId}" 
+                       style="background-color: #007BFF; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block;">
+                      View Details
+                    </a>
+          
+                    <p style="margin-top: 20px; font-size: 12px; color: #777;">
+                      This is an automated message. Please do not reply directly to this email.
+                    </p>
+                  </div>
+                </body>
+              </html>
+            `
+          }
+        },
+        Subject: { Data: "Leave Request Outcome" }
+      },
+      Source: SES_EMAIL
+    };
 
     console.log("Notifying user:", userEmail, "Status:", statusText);
     await ses.send(new SendEmailCommand(emailParams));
   } catch (error) {
     console.error("Error in notifyUser:", error);
+    throw error; 
   }
 };

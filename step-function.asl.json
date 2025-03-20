@@ -1,47 +1,56 @@
 {
-    "Comment": "Leave Management Workflow",
+    "Comment": "Leave Request Approval Workflow",
     "StartAt": "SendApprovalEmail",
     "States": {
-        "SendApprovalEmail": {
-            "Type": "Task",
-            "Resource": "arn:aws:lambda:REGION:ACCOUNT_ID:function:SendApprovalEmail",
-            "Parameters": {
-                "requestId.$": "$.requestId",
-                "email.$": "$.email",
-                "taskToken.$": "$$.Task.Token"
-            },
-            "TimeoutSeconds": 60,
-            "HeartbeatSeconds": 10,
-            "Next": "WaitForApproval"
+      "SendApprovalEmail": {
+        "Type": "Task",
+        "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
+        "Parameters": {
+          "FunctionName": "${SendApprovalEmailFunctionArn}",
+          "Payload": {
+            "requestId.$": "$.requestId",
+            "userEmail.$": "$.userEmail",
+            "approverEmail.$": "$.approverEmail",
+            "leaveDetails.$": "$.leaveDetails",
+            "taskToken.$": "$$.Task.Token",
+            "apiBaseUrl.$": "$.apiBaseUrl"
+          }
         },
-        "WaitForApproval": {
-            "Type": "Wait",
-            "Seconds": 60,
-            "Next": "CheckApprovalStatus"
+        "ResultPath": "$.approvalResult",
+        "TimeoutSeconds": 86400,
+        "Next": "CheckApprovalStatus"
+      },
+      "CheckApprovalStatus": {
+        "Type": "Choice",
+        "Choices": [
+          {
+            "Variable": "$.approvalResult.approvalStatus",
+            "StringEquals": "APPROVED",
+            "Next": "NotifyUser"
+          },
+          {
+            "Variable": "$.approvalResult.approvalStatus",
+            "StringEquals": "REJECTED",
+            "Next": "NotifyUser"
+          }
+        ],
+        "Default": "FailState"
+      },
+      "NotifyUser": {
+        "Type": "Task",
+        "Resource": "${NotifyUserFunctionArn}",
+        "Parameters": {
+          "requestId.$": "$.requestId",
+          "userEmail.$": "$.userEmail",
+          "approverEmail.$": "$.approverEmail",
+          "approvalStatus.$": "$.approvalResult.approvalStatus",
+          "leaveDetails.$": "$.leaveDetails"
         },
-        "CheckApprovalStatus": {
-            "Type": "Choice",
-            "Choices": [
-                {
-                    "Variable": "$.approved",
-                    "BooleanEquals": true,
-                    "Next": "NotifyUser"
-                }
-            ],
-            "Default": "EndState"
-        },
-        "NotifyUser": {
-            "Type": "Task",
-            "Resource": "arn:aws:lambda:REGION:ACCOUNT_ID:function:NotifyUser",
-            "Parameters": {
-                "requestId.$": "$.requestId",
-                "email.$": "$.email"
-            },
-            "End": true
-        },
-        "EndState": {
-            "Type": "Fail",
-            "Cause": "Leave request not approved"
-        }
+        "End": true
+      },
+      "FailState": {
+        "Type": "Fail",
+        "Cause": "Approval process failed or timed out"
+      }
     }
 }
