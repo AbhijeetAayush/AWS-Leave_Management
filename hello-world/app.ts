@@ -2,6 +2,7 @@ import { DynamoDBClient, PutItemCommand, GetItemCommand } from "@aws-sdk/client-
 import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
 import { SFNClient, StartExecutionCommand, SendTaskSuccessCommand } from "@aws-sdk/client-sfn"; // 
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from "aws-lambda";
+import * as jwt from 'jsonwebtoken';
 
 const dynamo = new DynamoDBClient({});
 const ses = new SESClient({});
@@ -10,10 +11,15 @@ const TABLE_NAME = process.env.TABLE_NAME!;
 const SES_EMAIL = process.env.SES_EMAIL!;
 const STATE_MACHINE_ARN = process.env.STATE_MACHINE_ARN!; 
 const APPROVER_EMAIL = process.env.APPROVER_EMAIL!;
+const JWT_SECRET = process.env.JWT_SECRET || 'default-secret';
 
 
 export const applyLeave = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
     try {
+      const userId = event.requestContext.authorizer?.userId;
+
+      if (!userId) throw new Error('User not authenticated');
+
       if (!TABLE_NAME || !SES_EMAIL || !STATE_MACHINE_ARN) {
         throw new Error("Missing required environment variables");
       }
@@ -21,7 +27,7 @@ export const applyLeave = async (event: APIGatewayProxyEvent): Promise<APIGatewa
   
       const body = JSON.parse(event.body || "{}");
       if (!body.userEmail || !body.leaveType || !body.startDate || !body.endDate ) {
-        return { statusCode: 400, body: JSON.stringify({ message: "Missing required fields" }) };
+        return { statusCode: 400, body: JSON.stringify({ message: "Missing  fields" }) };
       }
   
       const requestId = `LEAVE-${Date.now()}`;
@@ -45,7 +51,7 @@ export const applyLeave = async (event: APIGatewayProxyEvent): Promise<APIGatewa
       
       const apiBaseUrl = `https://${event.requestContext.domainName}/${event.requestContext.stage}`;
   
-      
+      const approverToken = jwt.sign({ sub: APPROVER_EMAIL, requestId }, JWT_SECRET, { expiresIn: '24h' });
       const input = {
         requestId,
         userEmail: body.userEmail,
@@ -56,17 +62,20 @@ export const applyLeave = async (event: APIGatewayProxyEvent): Promise<APIGatewa
           endDate: body.endDate,
           reason: body.reason || "Not provided"
         },
-        apiBaseUrl
+        apiBaseUrl,
+        approverToken
       };
   
       await sfn.send(new StartExecutionCommand({
         stateMachineArn: STATE_MACHINE_ARN,
         input: JSON.stringify(input)
       }));
+
+      const token = jwt.sign({ sub: userId, requestId }, JWT_SECRET, { expiresIn: '1h' });
   
       return {
         statusCode: 200,
-        body: JSON.stringify({ message: "Leave applied", requestId })
+        body: JSON.stringify({ message: "Leave applied", requestId, token })
       };
     } catch (error) {
       console.error("Error in applyLeave:", error);
@@ -76,11 +85,11 @@ export const applyLeave = async (event: APIGatewayProxyEvent): Promise<APIGatewa
 
 export const sendApprovalEmail = async (event: any): Promise<void> => {
     try {
-      const { requestId, userEmail, approverEmail, leaveDetails, taskToken, apiBaseUrl } = event;
+      const { requestId, userEmail, approverEmail, leaveDetails, taskToken, apiBaseUrl, approverToken } = event;
   
      
-      const approveUrl = `${apiBaseUrl}/process-approval?requestId=${requestId}&action=approve&taskToken=${encodeURIComponent(taskToken)}`;
-      const rejectUrl = `${apiBaseUrl}/process-approval?requestId=${requestId}&action=reject&taskToken=${encodeURIComponent(taskToken)}`;
+      const approveUrl = `${apiBaseUrl}/process-approval?requestId=${requestId}&action=approve&taskToken=${encodeURIComponent(taskToken)}&token=${encodeURIComponent(approverToken)}`;
+      const rejectUrl = `${apiBaseUrl}/process-approval?requestId=${requestId}&action=reject&taskToken=${encodeURIComponent(taskToken)}&token=${encodeURIComponent(approverToken)}`;
   
       const emailParams = {
         Destination: { ToAddresses: [approverEmail] },
@@ -154,66 +163,62 @@ export const sendApprovalEmail = async (event: any): Promise<void> => {
     }
   };
 
-export const processApproval = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
-  try {
-    const queryParams = event.queryStringParameters || {};
-    const { requestId, action, taskToken } = queryParams;
-
-    if (!requestId || !action || !taskToken) {
-      return { statusCode: 400, body: JSON.stringify({ message: "Missing required query parameters" }) };
+  export const processApproval = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
+    try {
+      const queryParams = event.queryStringParameters || {};
+      const { requestId, action, taskToken, token } = queryParams;
+  
+      if (!requestId || !action || !taskToken || !token) {
+        return { statusCode: 400, body: JSON.stringify({ message: "Missing required query parameters" }) };
+      }
+  
+      // FIX: Validate the token from query parameters
+      let userId;
+      try {
+        const decoded = jwt.verify(token, JWT_SECRET) as { sub: string; requestId: string };
+        userId = decoded.sub;
+        if (decoded.requestId !== requestId) {
+          return { statusCode: 403, body: JSON.stringify({ message: "Token does not match requestId" }) };
+        }
+      } catch (jwtError) {
+        console.error("JWT validation error:", jwtError);
+        return { statusCode: 401, body: JSON.stringify({ message: "Invalid or expired token" }) };
+      }
+  
+      const approvalStatus = action === "approve" ? "APPROVED" : "REJECTED";
+      console.log(`Processing ${approvalStatus} for request: ${requestId}`);
+  
+      await sfn.send(new SendTaskSuccessCommand({
+        taskToken,
+        output: JSON.stringify({ approvalStatus })
+      }));
+  
+      return {
+        statusCode: 200,
+        headers: { "Content-Type": "text/html" },
+        body: `
+          <html>
+            <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px; background-color: #f5f5f5;">
+              <div style="max-width: 600px; margin: 0 auto; padding: 20px; background-color: white; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
+                <h1 style="color: ${approvalStatus === 'APPROVED' ? '#4CAF50' : '#f44336'};">
+                  Leave Request ${approvalStatus === 'APPROVED' ? 'Approved' : 'Rejected'}
+                </h1>
+                <p style="font-size: 18px; margin: 20px 0;">
+                  The leave request <strong>${requestId}</strong> has been successfully ${approvalStatus.toLowerCase()}.
+                </p>
+                <a href="https://your-dashboard.com" style="display: inline-block; padding: 12px 24px; background-color: #007BFF; color: white; text-decoration: none; border-radius: 5px; font-weight: bold; margin-top: 20px;">
+                  Back to Dashboard
+                </a>
+              </div>
+            </body>
+          </html>
+        `
+      };
+    } catch (error) {
+      console.error("Error in processApproval:", error);
+      return { statusCode: 500, body: JSON.stringify({ message: "Internal server error" }) };
     }
-
-    const approvalStatus = action === "approve" ? "APPROVED" : "REJECTED";
-    console.log(`Processing ${approvalStatus} for request: ${requestId}`);
-
-   
-    await sfn.send(new SendTaskSuccessCommand({
-      taskToken,
-      output: JSON.stringify({ approvalStatus })
-    }));
-
-    return {
-      statusCode: 200,
-      headers: { "Content-Type": "text/html" },
-      body: /*JSON.stringify({ message: `Leave request ${requestId} ${approvalStatus.toLowerCase()}` })*/
-      `
-        <html>
-          <head>
-            <title>Leave Request ${approvalStatus}</title>
-          </head>
-          <body style="font-family: Arial, sans-serif; text-align: center; padding: 50px; background-color: #f5f5f5;">
-            <div style="max-width: 600px; margin: 0 auto; padding: 20px; background-color: white; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
-              <h1 style="color: ${approvalStatus === 'APPROVED' ? '#4CAF50' : '#f44336'};">
-                Leave Request ${approvalStatus === 'APPROVED' ? 'Approved' : 'Rejected'}
-              </h1>
-              <p style="font-size: 18px; margin: 20px 0;">
-                The leave request <strong>${requestId}</strong> has been successfully ${approvalStatus.toLowerCase()}.
-              </p>
-              <p style="color: #777;">
-                ${
-                  approvalStatus === 'APPROVED'
-                    ? 'The employee has been notified of the approval.'
-                    : 'The employee has been informed of the rejection.'
-                }
-              </p>
-              <a href="https://your-dashboard.com" 
-                 style="display: inline-block; padding: 12px 24px; background-color: #007BFF; color: white; text-decoration: none; border-radius: 5px; font-weight: bold; margin-top: 20px;">
-                Back to Dashboard
-              </a>
-              <p style="font-size: 14px; color: #999; margin-top: 30px;">
-                If you have any questions, please contact HR support.
-              </p>
-            </div>
-          </body>
-        </html>
-      `
-    };
-  } catch (error) {
-    console.error("Error in processApproval:", error);
-    return { statusCode: 500, body: JSON.stringify({ message: "Internal server error" }) };
-  }
-};
-
+  };
 
 export const notifyUser = async (event: any): Promise<void> => {
   try {

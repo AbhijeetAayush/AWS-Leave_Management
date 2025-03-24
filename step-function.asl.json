@@ -13,7 +13,8 @@
             "approverEmail.$": "$.approverEmail",
             "leaveDetails.$": "$.leaveDetails",
             "taskToken.$": "$$.Task.Token",
-            "apiBaseUrl.$": "$.apiBaseUrl"
+            "apiBaseUrl.$": "$.apiBaseUrl",
+            "approverToken.$": "$.approverToken"
           }
         },
         "ResultPath": "$.approvalResult",

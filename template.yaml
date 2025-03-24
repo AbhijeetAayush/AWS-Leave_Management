@@ -3,7 +3,13 @@ Transform: AWS::Serverless-2016-10-31
 Description: >
   actual-leave-abhijeet
 
-  Sample SAM Template for actual-leave-ashwin
+  Sample SAM Template for actual-leave-abhijeet
+
+Parameters:
+  JwtSecret:
+    Type: String
+    Description: JWT Secret for token authorization
+    NoEcho: true
 
 Globals:
   Function:
@@ -23,6 +29,7 @@ Resources:
         - AttributeName: requestId
           KeyType: HASH
       BillingMode: PAY_PER_REQUEST
+  
 
   LeaveAPI:
     Type: AWS::Serverless::Api
@@ -30,6 +37,42 @@ Resources:
       Name: LeaveManagementAPI
       StageName: Prod
       Cors: "'*'"
+      Auth:
+        DefaultAuthorizer: TokenAuthorizer
+        Authorizers:
+          TokenAuthorizer:
+            FunctionArn: !GetAtt AuthorizerFunction.Arn
+            Identity:
+              Header: Authorization
+              ValidationExpression: "^Bearer [-0-9a-zA-Z._]*$"
+  AuthorizerFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: true
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - authorizer.ts
+    Properties:
+      CodeUri: hello-world/
+      Handler: authorizer.handler
+      Runtime: nodejs22.x
+      Architectures:
+        - x86_64
+      Policies:
+        - Statement:
+            
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource: "*"
+      Environment:
+        Variables:
+          JWT_SECRET: !Ref JwtSecret
 
   SubmitLeaveFunction:
     Type: AWS::Serverless::Function
@@ -50,6 +93,7 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref LeaveTable
+       
         - Statement:
             - Effect: Allow
               Action:
@@ -61,6 +105,7 @@ Resources:
           SES_EMAIL: "abhijeet.aayush@antstack.io"
           STATE_MACHINE_ARN: !Ref LeaveStateMachine
           APPROVER_EMAIL: "abhijeet.aayush@antstack.io"
+          JWT_SECRET: !Ref JwtSecret
       Events:
         ApplyLeave:
           Type: Api
@@ -68,6 +113,8 @@ Resources:
             Path: /apply-leave
             Method: POST
             RestApiId: !Ref LeaveAPI
+            Auth:
+              Authorizer: TokenAuthorizer
 
   SendApprovalEmailFunction:
     Type: AWS::Serverless::Function
@@ -115,6 +162,9 @@ Resources:
                 - states:SendTaskSuccess
                 - states:SendTaskFailure
               Resource: "*"
+      Environment:
+        Variables:
+          JWT_SECRET: !Ref JwtSecret
       Events:
         ProcessApproval:
           Type: Api
@@ -122,6 +172,8 @@ Resources:
             Path: /process-approval
             Method: GET
             RestApiId: !Ref LeaveAPI
+            Auth:
+              Authorizer: NONE
 
   NotifyUserFunction:
     Type: AWS::Serverless::Function
@@ -158,3 +210,4 @@ Resources:
             FunctionName: !Ref SendApprovalEmailFunction
         - LambdaInvokePolicy:
             FunctionName: !Ref NotifyUserFunction
+  
