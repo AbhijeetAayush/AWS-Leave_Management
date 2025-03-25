@@ -7,10 +7,10 @@ import * as jwt from 'jsonwebtoken';
 const dynamo = new DynamoDBClient({});
 const ses = new SESClient({});
 const sfn = new SFNClient({}); 
-const TABLE_NAME = process.env.TABLE_NAME!;
-const SES_EMAIL = process.env.SES_EMAIL!;
-const STATE_MACHINE_ARN = process.env.STATE_MACHINE_ARN!; 
-const APPROVER_EMAIL = process.env.APPROVER_EMAIL!;
+const TABLE_NAME = process.env.TABLE_NAME || '';
+const SES_EMAIL = process.env.SES_EMAIL || '';
+const STATE_MACHINE_ARN = process.env.STATE_MACHINE_ARN || ''; 
+const APPROVER_EMAIL = process.env.APPROVER_EMAIL || '';
 const JWT_SECRET = process.env.JWT_SECRET || 'default-secret';
 
 
@@ -172,7 +172,7 @@ export const sendApprovalEmail = async (event: any): Promise<void> => {
         return { statusCode: 400, body: JSON.stringify({ message: "Missing required query parameters" }) };
       }
   
-      // FIX: Validate the token from query parameters
+      
       let userId;
       try {
         const decoded = jwt.verify(token, JWT_SECRET) as { sub: string; requestId: string };
