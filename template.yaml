@@ -37,6 +37,152 @@ Resources:
       Name: LeaveManagementAPI
       StageName: Prod
       Cors: "'*'"
+      DefinitionBody:
+        openapi: 3.0.0
+        info:
+          title: Leave Management API
+          description: API for managing leave requests and approvals.
+          version: 1.0.0
+        paths:
+          /apply-leave:
+            post:
+              summary: Apply for leave
+              description: Submits a new leave request.
+              tags:
+                - Leave Management
+              security:
+                - bearerAuth: []
+              requestBody:
+                required: true
+                content:
+                  application/json:
+                    schema:
+                      $ref: '#/components/schemas/LeaveRequest'
+              responses:
+                '200':
+                  description: Leave request submitted successfully
+                  content:
+                    application/json:
+                      schema:
+                        $ref: '#/components/schemas/LeaveResponse'
+                '400':
+                  description: Invalid request data
+                  content:
+                    application/json:
+                      schema:
+                        $ref: '#/components/schemas/Error'
+                '401':
+                  description: Unauthorized - Invalid or missing token
+                  content:
+                    application/json:
+                      schema:
+                        $ref: '#/components/schemas/Error'
+              x-amazon-apigateway-integration:
+                uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${SubmitLeaveFunction.Arn}/invocations"
+                httpMethod: POST
+                type: aws_proxy
+          /process-approval:
+            get:
+              summary: Process leave approval
+              description: Processes the approval or rejection of a leave request.
+              tags:
+                - Leave Management
+              security: []
+              parameters:
+                - name: requestId
+                  in: query
+                  required: true
+                  schema:
+                    type: string
+                - name: action
+                  in: query
+                  required: true
+                  schema:
+                    type: string
+                    enum: [approve, reject]
+                - name: taskToken
+                  in: query
+                  required: true
+                  schema:
+                    type: string
+                - name: token
+                  in: query
+                  required: true
+                  schema:
+                    type: string
+              responses:
+                '200':
+                  description: Approval processed successfully
+                  content:
+                    text/html:
+                      schema:
+                        type: string
+                '400':
+                  description: Missing or invalid parameters
+                  content:
+                    application/json:
+                      schema:
+                        $ref: '#/components/schemas/Error'
+                '401':
+                  description: Unauthorized - Invalid token
+                  content:
+                    application/json:
+                      schema:
+                        $ref: '#/components/schemas/Error'
+              x-amazon-apigateway-integration:
+                uri: !Sub "arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${ProcessApprovalFunction.Arn}/invocations"
+                httpMethod: POST
+                type: aws_proxy
+        components:
+          securitySchemes:
+            bearerAuth:
+              type: http
+              scheme: bearer
+              bearerFormat: JWT
+          schemas:
+            LeaveRequest:
+              type: object
+              required:
+                - userEmail
+                - leaveType
+                - startDate
+                - endDate
+              properties:
+                userEmail:
+                  type: string
+                  example: "user@example.com"
+                leaveType:
+                  type: string
+                  example: "vacation"
+                startDate:
+                  type: string
+                  format: date
+                  example: "2023-12-01"
+                endDate:
+                  type: string
+                  format: date
+                  example: "2023-12-05"
+                reason:
+                  type: string
+                  example: "Family vacation"
+            LeaveResponse:
+              type: object
+              properties:
+                message:
+                  type: string
+                  example: "Leave applied"
+                requestId:
+                  type: string
+                  example: "LEAVE-1234567890"
+                token:
+                  type: string
+                  example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+            Error:
+              type: object
+              properties:
+                message:
+                  type: string
+                  example: "Missing required field: userEmail"
       Auth:
         DefaultAuthorizer: TokenAuthorizer
         Authorizers:

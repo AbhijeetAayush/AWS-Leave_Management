@@ -1,0 +1,164 @@
+openapi: 3.0.0
+info:
+  title: Leave Management API
+  description: API for managing leave requests and approvals.
+  version: 1.0.0
+servers:
+  - url: https://{api-id}.execute-api.{region}.amazonaws.com/{stage}
+    description: API Gateway endpoint
+    variables:
+      api-id:
+        default: your-api-id
+        description: API Gateway ID
+      region:
+        default: your-region
+        description: AWS region
+      stage:
+        default: Prod
+        description: API stage
+paths:
+  /apply-leave:
+    post:
+      summary: Apply for leave
+      description: Submits a new leave request.
+      tags:
+        - Leave Management
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LeaveRequest'
+      responses:
+        '200':
+          description: Leave request submitted successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LeaveResponse'
+        '400':
+          description: Invalid request data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized - Invalid or missing token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+  /process-approval:
+    get:
+      summary: Process leave approval
+      description: Processes the approval or rejection of a leave request. Returns an HTML page indicating the result.
+      tags:
+        - Leave Management
+      parameters:
+        - name: requestId
+          in: query
+          required: true
+          schema:
+            type: string
+          description: The ID of the leave request
+        - name: action
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [approve, reject]
+          description: The action to take (approve or reject)
+        - name: taskToken
+          in: query
+          required: true
+          schema:
+            type: string
+          description: The task token from Step Functions
+        - name: token
+          in: query
+          required: true
+          schema:
+            type: string
+          description: The JWT token for authentication
+      responses:
+        '200':
+          description: Approval processed successfully
+          content:
+            text/html:
+              schema:
+                type: string
+                example: "<html><body><h1>Leave Approved</h1></body></html>"
+        '400':
+          description: Missing or invalid parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: Unauthorized - Invalid token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT token required in the Authorization header for authenticated requests.
+  schemas:
+    LeaveRequest:
+      type: object
+      required:
+        - userEmail
+        - leaveType
+        - startDate
+        - endDate
+      properties:
+        userEmail:
+          type: string
+          description: Email of the user requesting leave
+          example: "user@example.com"
+        leaveType:
+          type: string
+          description: Type of leave (e.g., vacation, sick)
+          example: "vacation"
+        startDate:
+          type: string
+          format: date
+          description: Start date of the leave
+          example: "2023-12-01"
+        endDate:
+          type: string
+          format: date
+          description: End date of the leave
+          example: "2023-12-05"
+        reason:
+          type: string
+          description: Reason for the leave (optional)
+          example: "Family vacation"
+    LeaveResponse:
+      type: object
+      properties:
+        message:
+          type: string
+          description: Success message
+          example: "Leave applied"
+        requestId:
+          type: string
+          description: Unique identifier for the leave request
+          example: "LEAVE-1234567890"
+        token:
+          type: string
+          description: JWT token generated for the request
+          example: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+    Error:
+      type: object
+      properties:
+        message:
+          type: string
+          description: Error message describing the issue
+          example: "Missing required field: userEmail"
